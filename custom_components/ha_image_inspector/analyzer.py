@@ -4,6 +4,8 @@ import argparse
 import csv
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from email.parser import Parser
+from functools import cache
 import gzip
 import hashlib
 import io
@@ -15,6 +17,7 @@ import posixpath
 import re
 import stat
 import tarfile
+import tomllib
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
@@ -96,6 +99,8 @@ def image_path(path):
 def metadata_file(path, size):
     if path.endswith(".dist-info/RECORD"):
         return size <= 16 * 1024 * 1024
+    if path.endswith(".dist-info/METADATA") or path == "usr/src/homeassistant/pyproject.toml":
+        return size <= 4 * 1024 * 1024
     return path.endswith("/manifest.json") and size <= 256 * 1024 and classify(path, None)[0] == "integration"
 
 
@@ -222,35 +227,135 @@ def classify(path, package):
     return "other", "/" + "/".join(parts[:min(len(parts) - 1 or 1, 2)])
 
 
-def link_requirements(groups, metadata):
-    def normalize(name):
-        return re.sub(r"[-_.]+", "-", name).lower()
+def normalized_name(name):
+    return re.sub(r"[-_.]+", "-", name).lower()
 
-    packages = {normalize(name): group for (category, name), group in groups.items() if category == "python"}
+
+def integration_manifests(groups, metadata):
+    manifests = {}
     for path, content in metadata.items():
         if not path.endswith("/manifest.json"):
             continue
-        _, domain = classify(path, None)
-        integration = groups.get(("integration", domain))
-        if integration is None:
-            continue
+        if path.startswith("custom_components/"):
+            domain = path.split("/")[1]
+        else:
+            _, domain = classify(path, None)
+            if ("integration", domain) not in groups or posixpath.basename(posixpath.dirname(path)) != domain:
+                continue
         try:
-            requirements = json.loads(content).get("requirements", [])
-        except (ValueError, AttributeError):
+            manifest = json.loads(content)
+        except ValueError:
             continue
-        related = set(integration.get("related", []))
-        for requirement in requirements:
-            match = re.match(r"[A-Za-z0-9_.-]+", requirement)
-            if match and (package := packages.get(normalize(match[0]))):
-                related.add(package["name"])
-                used_by = package.setdefault("related", [])
-                if domain not in used_by:
-                    used_by.append(domain)
-        if related:
-            integration["related"] = sorted(related)
-    for package in packages.values():
-        if "related" in package:
-            package["related"].sort()
+        if isinstance(manifest, dict):
+            manifests[domain] = manifest
+    return manifests
+
+
+def link_requirements(groups, metadata, source="container", architecture=None):
+    """Trace installed dependencies from HA manifests and Python distribution metadata."""
+    try:
+        from packaging.markers import default_environment
+        from packaging.requirements import InvalidRequirement, Requirement
+    except ImportError:
+        return None
+
+    packages = {normalized_name(name): group for (category, name), group in groups.items() if category == "python"}
+    manifests = integration_manifests(groups, metadata)
+    environment = default_environment()
+    unknown = set()
+    if source != "container":
+        environment.update(sys_platform="linux", platform_system="Linux", os_name="posix",
+                           implementation_name="cpython", platform_python_implementation="CPython",
+                           platform_machine={"arm64": "aarch64", "amd64": "x86_64"}.get(architecture, ""))
+        versions = {match[1] for path in metadata if (match := re.search(r"/python(\d+\.\d+)/site-packages/", path))}
+        if len(versions) == 1:
+            environment["python_version"] = next(iter(versions))
+        else:
+            unknown.add("python_version")
+        unknown.update(("python_full_version", "implementation_version", "platform_release", "platform_version"))
+
+    def parse(requirements):
+        if not isinstance(requirements, list):
+            return
+        for text in requirements:
+            try:
+                yield Requirement(text)
+            except (InvalidRequirement, TypeError):
+                continue
+
+    requirements_by_package = {}
+    for path, content in metadata.items():
+        if not path.endswith(".dist-info/METADATA"):
+            continue
+        headers = Parser().parsestr(content, headersonly=True)
+        if name := headers.get("Name"):
+            requirements_by_package[normalized_name(name)] = list(parse(headers.get_all("Requires-Dist", [])))
+    if "homeassistant" not in requirements_by_package and (core := metadata.get("usr/src/homeassistant/pyproject.toml")):
+        try:
+            requirements_by_package["homeassistant"] = list(parse(tomllib.loads(core).get("project", {}).get("dependencies", [])))
+        except tomllib.TOMLDecodeError:
+            pass
+
+    roots = {domain: list(parse(manifest.get("requirements", []))) for domain, manifest in manifests.items()}
+    hard_dependencies = {}
+    for domain, manifest in manifests.items():
+        dependencies = manifest.get("dependencies")
+        if isinstance(dependencies, list):
+            hard_dependencies[domain] = [dependency for dependency in dependencies if isinstance(dependency, str)]
+    if "homeassistant" in requirements_by_package:
+        roots["_core"] = requirements_by_package["homeassistant"]
+
+    def outgoing(domain):
+        """Yield the requirements of hard dependencies on other HA integrations."""
+        pending = list(hard_dependencies.get(domain, ()))
+        seen = {domain}
+        while pending:
+            target = pending.pop()
+            if target not in seen and target in manifests:
+                seen.add(target)
+                yield from roots[target]
+                pending.extend(hard_dependencies.get(target, ()))
+
+    @cache
+    def applicable(requirement, extra):
+        marker = requirement.marker
+        if marker is None:
+            return True
+        if any(re.search(rf"\b{key}\b", str(marker)) for key in unknown):
+            return False
+        try:
+            return marker.evaluate({**environment, "extra": extra})
+        except (KeyError, ValueError):
+            return False
+
+    result = {}
+    for domain, requirements in sorted(roots.items()):
+        pending = [(req, "", True) for req in requirements]
+        pending.extend((req, "", False) for req in outgoing(domain))
+        visited, links = set(), {}
+        while pending:
+            requirement, extra, direct = pending.pop()
+            name = normalized_name(requirement.name)
+            if not applicable(requirement, extra) or name not in packages:
+                continue
+            label = packages[name]["name"]
+            if direct:
+                links[label] = "direct"
+            else:
+                links.setdefault(label, "indirect")
+            for requested_extra in ("", *sorted(requirement.extras)):
+                key = (name, requested_extra)
+                if key not in visited:
+                    visited.add(key)
+                    pending.extend((req, requested_extra, False) for req in requirements_by_package.get(name, ()))
+        result[domain] = links
+        if domain != "_core":
+            direct_names = sorted(name for name, relation in links.items() if relation == "direct")
+            if direct_names and (integration := groups.get(("integration", domain))):
+                integration["related"] = direct_names
+            for name in direct_names:
+                groups[("python", name)].setdefault("related", []).append(domain)
+    return result
 
 
 def inspect_layer(source, media_type, index, files, metadata):
@@ -414,6 +519,16 @@ def analyze_container(reference, config_dir="/config"):
         if mount != "/":
             excluded.add(Path(mount))
     files, metadata = read_filesystem(Path("/"), excluded)
+    custom_components = Path(config_dir) / "custom_components"
+    for manifest in sorted(custom_components.glob("*/manifest.json")):
+        domain = manifest.parent.name
+        if not re.fullmatch(r"[a-z0-9_]+", domain) or domain == "_core":
+            continue
+        try:
+            if manifest.is_file() and manifest.stat().st_size <= 256 * 1024:
+                metadata[f"custom_components/{domain}/manifest.json"] = manifest.read_text(encoding="utf-8", errors="replace")
+        except (FileNotFoundError, PermissionError):
+            continue
     return summarize(reference, "", host_architecture(), "container", [], files, metadata)
 
 
@@ -434,12 +549,13 @@ def summarize(reference, digest, architecture, source, layers, files, metadata):
         if len(group["largest"]) < 5 and payload.size:
             group["largest"].append({"path": "/" + path, "bytes": payload.size})
 
-    link_requirements(groups, metadata)
+    dependencies = link_requirements(groups, metadata, source, architecture)
     totals = {key: sum(layer[key] for layer in layers) for key in ("compressed", "tar", "written", "visible")}
     if source == "container":
         totals = {"visible": sum(group["bytes"] for group in groups.values())}
     return {"generated": datetime.now(timezone.utc).isoformat(), "reference": reference, "source": source,
             "digest": digest, "architecture": architecture, "layers": layers,
+            "dependencies": dependencies,
             "totals": totals,
             "groups": sorted(groups.values(), key=lambda group: (-group["bytes"], group["name"]))}
 

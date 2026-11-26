@@ -61,6 +61,29 @@ class LayerAccountingTests(unittest.TestCase):
         self.assertEqual(groups[("integration", "demo")], {"bytes": 5, "related": ["My-Package"]})
         self.assertEqual(groups[("python", "My-Package")]["related"], ["demo"])
 
+    def test_dependency_graph_distinguishes_direct_transitive_and_unrelated_packages(self):
+        group_names = ["Adapter", "Transport", "Accelerator", "Optional", "DifferentOS", "Shared", "Standalone"]
+        groups = {("python", name): {"name": name, "bytes": 100} for name in group_names}
+        groups[("integration", "demo")] = {"bytes": 5}
+        groups[("integration", "support")] = {"bytes": 5}
+        metadata = {
+            "usr/src/homeassistant/homeassistant/components/demo/manifest.json": '{"requirements":["adapter[fast]"],"dependencies":["support"]}',
+            "usr/src/homeassistant/homeassistant/components/support/manifest.json": '{"requirements":["shared"],"dependencies":["demo"]}',
+            "custom_components/custom_demo/manifest.json": '{"requirements":["standalone"],"dependencies":["support"]}',
+            "usr/local/lib/python3.14/site-packages/adapter-1.dist-info/METADATA":
+                'Name: Adapter\nRequires-Dist: Transport\nRequires-Dist: Accelerator; extra == "fast"\n'
+                'Requires-Dist: Optional; extra == "unused"\nRequires-Dist: DifferentOS; sys_platform == "win32"\n',
+            "usr/local/lib/python3.14/site-packages/transport-1.dist-info/METADATA": "Name: Transport\nRequires-Dist: Adapter\n",
+            "usr/src/homeassistant/pyproject.toml": '[project]\ndependencies = ["shared"]\n',
+        }
+        graph = analyzer.link_requirements(groups, metadata, "registry", "arm64")
+        self.assertEqual(graph["demo"], {"Adapter": "direct", "Accelerator": "indirect", "Transport": "indirect", "Shared": "indirect"})
+        self.assertEqual(graph["support"]["Shared"], "direct")
+        self.assertEqual(graph["custom_demo"]["Standalone"], "direct")
+        self.assertEqual(graph["custom_demo"]["Shared"], "indirect")
+        self.assertEqual(graph["_core"], {"Shared": "direct"})
+        self.assertEqual(groups[("python", "Adapter")]["related"], ["demo"])
+
 
 def tar_bytes(entries):
     data = io.BytesIO()

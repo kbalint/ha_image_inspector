@@ -49,4 +49,8 @@ A hivatalos tároló sorából az `@` utáni digestet másold a panelbe. Egy reg
 | Látható fájlok | A kész image normál fájljainak mérete, a hard linkek közös tartalmát egyszer számolva |
 | Elfedezett fájlok | A törölt vagy felülírt fájlok alsó rétegekben megmaradt tartalma |
 
-A mérés hatóköre az image. A futó konténer írásai, a `/config`, a mountok, a megosztott rétegek miatt megtakarított hely és a Docker tárolódriverének többlete ezen kívül esnek. A Python-csomagokat a telepítési jegyzékük alapján azonosítja, ahol van ilyen. A panelek a beépített integrációk közvetlen csomagfüggőségeit is mutatják, önálló méretük megőrzésével.
+A rétegenkénti mérés az image-re vonatkozik. A futó konténer írásai, a `/config`, a mountok, a megosztott rétegek miatt megtakarított hely és a Docker tárolódriverének többlete ezen kívül esnek. A Python-csomagokat a telepítési jegyzékük alapján azonosítja, ahol van ilyen. A megosztott csomagok mérete önállóan jelenik meg.
+
+## Melyik integrációnak kell egy Python-csomag?
+
+A **Csomagok ellenőrzése integráció szerint** mezőben válassz integrációt vagy Home Assistant Core-t. A lista megjelöli a közvetlen és közvetett függőségeket, illetve azokat a csomagokat, amelyekhez nincs deklarált kapcsolat. A csomag sorát lenyitva látszanak a többi integráció kapcsolatai. A panel az integrációs manifestek és a Python-csomagok telepített metaadatai alapján dolgozik, a kiválasztott extrákat is figyelembe véve. A futó konténer elemzése a telepített egyéni integrációk manifestjeit is felhasználja a függőségekhez. Ezek és a csatolt konfigurációs könyvtár többi fájlja kívül marad a méretmérésen. A futó kód ettől még importálhat olyan csomagot, amelyhez nincs deklarált kapcsolat.

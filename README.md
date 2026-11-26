@@ -51,6 +51,10 @@ Use the digest after `@` from the official repository entry. This mode needs out
 | Visible files | Regular-file contents in the final image, counting hard-linked content once |
 | Hidden file payload | File contents still stored in lower layers after removal or replacement |
 
-The measurements cover image layers. Container writes, `/config`, external volumes, shared-layer deduplication and storage-driver overhead are outside their scope. Sizes are decimal. Python files are attributed using installation records where available. The detail view links direct requirements declared by built-in integrations to packages present in the image. Shared and transitive dependencies keep their own byte totals.
+The layer measurements cover image layers. Container writes, `/config`, external volumes, shared-layer deduplication and storage-driver overhead are outside their scope. Sizes are decimal. Python files are attributed using installation records where available. Shared dependencies keep their own byte totals.
+
+## Check which integration needs a Python package
+
+Choose an integration or Home Assistant Core under **Check a package against an integration**. Each installed package is marked as a direct dependency, an indirect dependency, or as having no declared link to that selection. Expanding a package lists other integrations that declare it directly or indirectly. The dependency graph follows integration manifests, Python `Requires-Dist` metadata and applicable extras. The running container scan also reads custom integration manifests from the configuration directory for dependency attribution. Those files and the rest of the mounted configuration directory stay outside the size totals. The list describes declared requirements. A package can still be imported at runtime or used by another integration when the selected integration has no declared link to it.
 
 The Home Assistant 2026.11.3 ARM64 scan found **2.38 GB** of visible file contents across **2.52 GB** of unpacked layer archives, with **660 MB** of compressed layer data. Its largest build layer installs Python wheels and integration requirements.

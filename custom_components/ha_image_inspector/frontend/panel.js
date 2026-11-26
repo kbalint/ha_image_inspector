@@ -29,6 +29,11 @@ const strings = {
     core: 'Home Assistant Core', other: 'Other paths', noMatches: 'No matching components.',
     files: 'files', biggest: 'Largest files', layer: 'Layer', payload: 'File payload',
     requirements: 'Declared Python dependencies present in the image', usedBy: 'Declared directly by',
+    integrationScope: 'Check a package against an integration', allIntegrations: 'Select an integration',
+    relationFilter: 'Filter by dependency', allRelations: 'All relationships', direct: 'Direct dependency',
+    indirect: 'Indirect dependency', unrelated: 'No declared link', requiredBy: 'Indirectly required by',
+    dependencyHelp: 'Based on integration manifests and installed package metadata. A package without a declared link may still be used at runtime or by other integrations.',
+    dependencyRescan: 'Run a new scan to get the integration dependency breakdown.',
     layerCaption: 'Base layer first. Select a layer to see its digest and build command.',
     attribution: 'Package ownership comes from Python installation records where available. Shared dependencies appear under their package names.',
     about: 'The report covers the selected image layers. Container changes, mounted volumes and Docker storage-driver overhead are outside this measurement.',
@@ -65,6 +70,11 @@ const strings = {
     core: 'Home Assistant Core', other: 'Egyéb útvonalak', noMatches: 'Nincs találat.',
     files: 'fájl', biggest: 'Legnagyobb fájlok', layer: 'Réteg', payload: 'Fájladatok',
     requirements: 'Az image-ben megtalálható közvetlen Python-függőségek', usedBy: 'Közvetlenül ezt használja',
+    integrationScope: 'Csomagok ellenőrzése integráció szerint', allIntegrations: 'Válassz integrációt',
+    relationFilter: 'Szűrés függőség alapján', allRelations: 'Minden kapcsolat', direct: 'Közvetlen függőség',
+    indirect: 'Közvetett függőség', unrelated: 'Nincs deklarált kapcsolat', requiredBy: 'Közvetett függősége ezeknek',
+    dependencyHelp: 'A besorolás az integrációk manifestjein és a telepített csomagok metaadatain alapul. A futó kód vagy más integráció akkor is használhat egy csomagot, ha itt nincs deklarált kapcsolat.',
+    dependencyRescan: 'Indíts új elemzést az integrációnkénti függőségbontáshoz.',
     layerCaption: 'Az alapréteg van elöl. A digest és a buildparancs a réteg megnyitásával látható.',
     attribution: 'A Python-csomagokhoz a telepítési jegyzék rendeli a fájlokat, ahol elérhető. A megosztott függőségek a saját csomagnevük alatt látszanak.',
     about: 'A mérés a kiválasztott image rétegeire vonatkozik. A konténer változásai, a csatolt kötetek és a Docker tárolódriverének többlete kívül esnek rajta.',
@@ -83,6 +93,8 @@ class ImageInspectorPanel extends HTMLElement {
     this.tab = 'components';
     this.mode = 'local';
     this.category = '';
+    this.integration = '';
+    this.relation = '';
     this.query = '';
     this.limit = 40;
   }
@@ -243,15 +255,46 @@ docker image save --output /path/to/ha-config/ha_image_inspector.tar "$image_id"
     const table = this.shadowRoot.querySelector('#table');
     const tabs = this.report.source === 'container' ? ['components'] : ['components', 'layers'];
     if (!tabs.includes(this.tab)) this.tab = 'components';
+    const graph = this.report.dependencies;
+    if (this.integration && !Object.hasOwn(graph || {}, this.integration)) {
+      this.integration = '';
+      this.relation = '';
+    }
+    const domains = Object.keys(graph || {});
+    const scope = domains.length ? `<div class="dependency-controls"><label>${t.integrationScope}
+      <select id="dependency-integration"><option value="">${t.allIntegrations}</option>${domains.map(domain =>
+      `<option value="${escape(domain)}" ${this.integration === domain ? 'selected' : ''}>${domain === '_core' ? t.core : escape(domain)}</option>`).join('')}</select></label>
+      ${this.integration ? `<label>${t.relationFilter}<select id="dependency-relation"><option value="">${t.allRelations}</option>${['direct', 'indirect', 'unrelated'].map(relation =>
+        `<option value="${relation}" ${this.relation === relation ? 'selected' : ''}>${t[relation]}</option>`).join('')}</select></label>` : ''}</div>` : '';
     table.innerHTML = `<div class="table-header"><div class="tabs">${tabs.map(tab => `<button type="button" data-tab="${tab}" aria-pressed="${this.tab === tab}">${t[tab]}</button>`).join('')}</div>
       ${this.tab === 'components' ? `<div class="filters"><input type="search" aria-label="${t.filter}" placeholder="${t.filter}" value="${escape(this.query)}"><select aria-label="${t.all}">${['', ...categories].map(category => `<option value="${category}" ${category === this.category ? 'selected' : ''}>${category ? t[category] : t.all}</option>`).join('')}</select></div>` : ''}</div>
-      <p class="caption">${this.tab === 'components' ? t.attribution : t.layerCaption}</p><div id="rows"></div>`;
+      ${this.tab === 'components' ? scope : ''}<p class="caption">${this.tab === 'layers' ? t.layerCaption : this.integration ? t.dependencyHelp : t.attribution}</p>
+      ${this.tab === 'components' && !graph ? `<p class="caption">${t.dependencyRescan}</p>` : ''}<div id="rows"></div>`;
     table.querySelectorAll('[data-tab]').forEach(button => {
       button.onclick = () => { this.tab = button.dataset.tab; this.renderTable(); };
     });
     if (this.tab === 'components') {
       table.querySelector('input').oninput = event => { this.query = event.target.value; this.limit = 40; this.renderRows(); };
-      table.querySelector('select').onchange = event => { this.category = event.target.value; this.limit = 40; this.renderRows(); };
+      table.querySelector('.filters select').onchange = event => {
+        this.category = event.target.value;
+        this.limit = 40;
+        if (this.integration && this.category !== 'python') {
+          this.integration = '';
+          this.relation = '';
+          this.renderTable();
+        } else this.renderRows();
+      };
+      const integration = table.querySelector('#dependency-integration');
+      if (integration) integration.onchange = event => {
+        this.integration = event.target.value;
+        this.relation = '';
+        this.limit = 40;
+        if (this.integration) this.category = 'python';
+        this.renderTable();
+        table.querySelector('#dependency-integration')?.focus();
+      };
+      const relation = table.querySelector('#dependency-relation');
+      if (relation) relation.onchange = event => { this.relation = event.target.value; this.limit = 40; this.renderRows(); };
     }
     this.renderRows();
   }
@@ -268,12 +311,28 @@ docker image save --output /path/to/ha-config/ha_image_inspector.tar "$image_id"
       return;
     }
     const query = this.query.trim().toLowerCase();
-    const matches = groups.filter(group => (!this.category || this.category === group.category) && group.name.toLowerCase().includes(query));
+    const graph = this.report.dependencies || {};
+    const links = this.integration ? graph[this.integration] : null;
+    const matchRelation = group => Object.hasOwn(links, group.name) ? links[group.name] : 'unrelated';
+    const matches = groups.filter(group => (!this.category || this.category === group.category) && group.name.toLowerCase().includes(query)
+      && (!this.relation || matchRelation(group) === this.relation));
     const largest = matches[0]?.bytes || 1;
-    rows.innerHTML = matches.slice(0, this.limit).map(group => `<details><summary><span><strong>${escape(group.name)}</strong><small>${t[group.category]} · ${group.files.toLocaleString(this.language)} ${t.files}</small></span>
+    rows.innerHTML = matches.slice(0, this.limit).map(group => {
+      const relation = links ? matchRelation(group) : '';
+      const declared = {direct: [], indirect: []};
+      if (group.category === 'python') {
+        for (const [domain, dependencies] of Object.entries(graph)) {
+          if (Object.hasOwn(dependencies, group.name)) declared[dependencies[group.name]].push(domain === '_core' ? t.core : domain);
+        }
+      }
+      const usedBy = declared.direct.length ? declared.direct : group.related;
+      return `<details><summary><span><strong>${escape(group.name)}</strong><small>${t[group.category]} · ${group.files.toLocaleString(this.language)} ${t.files}</small>
+      ${relation ? `<small class="relation ${relation}">${t[relation]}</small>` : ''}</span>
       <span class="bar" aria-hidden="true"><i class="${group.category}" style="width:${group.bytes / largest * 100}%"></i></span><b>${this.format(group.bytes)}<small>${(group.bytes / (totals.visible || 1)).toLocaleString(this.language, {style: 'percent', maximumFractionDigits: 2})}</small></b></summary>
-      <div class="details">${group.related?.length ? `<p><strong>${group.category === 'integration' ? t.requirements : t.usedBy}</strong><br>${group.related.map(escape).join(', ')}</p>` : ''}
-      <strong>${t.biggest}</strong>${group.largest.map(file => `<div class="file"><code>${escape(file.path)}</code><b>${this.format(file.bytes)}</b></div>`).join('')}</div></details>`).join('') || `<p class="caption">${t.noMatches}</p>`;
+      <div class="details">${usedBy?.length ? `<p><strong>${group.category === 'integration' ? t.requirements : t.usedBy}</strong><br>${usedBy.map(escape).join(', ')}</p>` : ''}
+      ${declared.indirect.length ? `<p><strong>${t.requiredBy}</strong><br>${declared.indirect.map(escape).join(', ')}</p>` : ''}
+      <strong>${t.biggest}</strong>${group.largest.map(file => `<div class="file"><code>${escape(file.path)}</code><b>${this.format(file.bytes)}</b></div>`).join('')}</div></details>`;
+    }).join('') || `<p class="caption">${t.noMatches}</p>`;
     if (matches.length > this.limit) {
       const button = document.createElement('button');
       button.className = 'more';
