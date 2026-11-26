@@ -2,18 +2,22 @@
 
 [English documentation](README.md)
 
-A Home Assistant adminisztrátori oldalsávjában megmutatja egy helyi Docker image vagy a hivatalos Container image tárhelybontását. Külön kereshetők a beépített integrációk, a Python-csomagok és a rendszereszközök. A sorok kibontva a legnagyobb fájlokat, a Rétegek fül pedig a buildlépések méretét mutatja.
+A Home Assistant adminisztrátori oldalsávjában megmutatja, mennyi helyet foglalnak a futó build integrációi, Python-csomagjai és rendszerfájljai. Docker-archívumból vagy a hivatalos registryből külön rétegenkénti mérés is indítható.
 
 ## HACS-telepítés
 
 1. A HACS **Egyéni tárolók** menüjében add hozzá a `https://github.com/kbalint/ha_image_inspector` tárolót **Integráció** típussal.
 2. Töltsd le a **HA Image Inspector** integrációt, és indítsd újra a Home Assistantot.
 3. A **Beállítások → Eszközök és szolgáltatások → Integráció hozzáadása** alatt válaszd a **HA Image Inspector** integrációt.
-4. Nyisd meg az oldalsávban a **HA Image Inspector** panelt, és kattints az **Image elemzése** gombra.
+4. Nyisd meg az oldalsávban a **HA Image Inspector** panelt, és kattints a **Futó konténer elemzése** gombra.
 
 Kézi telepítéshez a kiadás csomagjából másold a `custom_components/ha_image_inspector` mappát a Home Assistant konfigurációs könyvtárának `custom_components` mappájába, majd folytasd a második lépéstől. A modulhoz legalább Home Assistant 2026.11 kell.
 
-## Helyi Docker image elemzése offline
+## Futó konténer elemzése
+
+Az integráció magán a Home Assistant konténerén belül olvassa a futó build látható fájljait, beleértve a konténer írható rétegének módosításait. A `/config` és a többi csatolt kötet kimarad. Ehhez nincs szükség image-exportra, Docker socketre vagy registry-hozzáférésre. Az alsó rétegek mérete és az elfedett fájlok külön vizsgálhatók Docker-archívumból vagy a registryből.
+
+## Helyi Docker-archívum elemzése offline
 
 A Docker hoston exportáld a futó konténer image-ét. A `/path/to/ha-config` helyére a konténer `/config` alá csatolt hostmappája kerüljön, a `homeassistant` helyére pedig a konténer neve.
 
@@ -22,7 +26,7 @@ image_id=$(docker container inspect --format '{{.Image}}' homeassistant)
 docker image save --output /path/to/ha-config/ha_image_inspector.tar "$image_id"
 ```
 
-A panelen válaszd a **Helyi Docker image** módot és indítsd el az elemzést. A külső tar egyetlen image-et és platformot tartalmazzon. Az export átmenetileg helyet foglal a hoston. A jelentés mentése után törölheted. Ebben a módban nulla a registry-forgalom, és nincs szükség a Docker socket csatolására.
+A panelen a **Helyi konténer** alatt nyisd le a **Docker-archívum elemzése rétegenként** részt, majd indítsd el az elemzést. A külső tar egyetlen image-et és platformot tartalmazzon. Az export átmenetileg helyet foglal a hoston. A jelentés mentése után törölheted.
 
 ## Hivatalos registry-image elemzése
 
@@ -33,7 +37,7 @@ image_id=$(docker container inspect --format '{{.Image}}' homeassistant)
 docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$image_id"
 ```
 
-A hivatalos tároló sorából az `@` utáni digestet másold a panelbe. Egy registry-elemzés több száz MB letöltést jelenthet, és HTTPS-elérést igényel a GHCR és a rétegtárhely felé. A Home Assistant mindkét módban elmenti az utolsó sikeres jelentést.
+A hivatalos tároló sorából az `@` utáni digestet másold a panelbe. Egy registry-elemzés több száz MB letöltést jelenthet, és HTTPS-elérést igényel a GHCR és a rétegtárhely felé. A Home Assistant elmenti az utolsó sikeres jelentést.
 
 ## Mit mér?
 

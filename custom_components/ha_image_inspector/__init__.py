@@ -15,7 +15,7 @@ from homeassistant.components.http import StaticPathConfig
 from homeassistant.const import __version__ as HA_VERSION
 from homeassistant.helpers.storage import Store
 
-from .analyzer import LOCAL_ARCHIVE, REFERENCE, analyze, analyze_archive, host_architecture
+from .analyzer import LOCAL_ARCHIVE, REFERENCE, analyze, analyze_archive, analyze_container, host_architecture
 
 DOMAIN = "ha_image_inspector"
 TITLE = "HA Image Inspector"
@@ -47,7 +47,9 @@ class Inspection:
                              "downloaded": downloaded, "download_total": download_total}
 
         try:
-            if source == "local":
+            if source == "container":
+                work = partial(analyze_container, f"Home Assistant {HA_VERSION}", self.hass.config.config_dir)
+            elif source == "local":
                 work = partial(analyze_archive, self.hass.config.path(LOCAL_ARCHIVE), report_progress)
             else:
                 work = partial(analyze, reference, architecture, report_progress)
@@ -73,7 +75,7 @@ class Inspection:
     vol.Required("type"): f"{DOMAIN}/inspect",
     vol.Optional("reference"): str,
     vol.Optional("architecture"): str,
-    vol.Optional("source"): vol.In(["local", "registry"]),
+    vol.Optional("source"): vol.In(["container", "local", "registry"]),
     vol.Optional("known"): str,
 })
 @websocket_api.async_response
@@ -87,7 +89,7 @@ async def inspect(hass, connection, msg):
         return
     state = shared["inspection"]
     source = msg.get("source", "registry")
-    if source == "local" or "reference" in msg or "source" in msg:
+    if "reference" in msg or "source" in msg:
         reference = msg.get("reference", HA_VERSION)
         architecture = msg.get("architecture", host_architecture())
         if source == "registry" and (not REFERENCE.fullmatch(reference) or architecture not in {"amd64", "arm64"}):

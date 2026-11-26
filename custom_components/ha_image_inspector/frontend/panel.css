@@ -42,6 +42,7 @@ form { display: grid; grid-template-columns: minmax(170px, 1fr) auto auto; align
 .registry-warning { display: flex; align-items: flex-start; gap: 9px; padding: 10px 12px; background: #493515; border: 1px solid #b9914a; border-radius: 9px; color: #fff0c9; }
 .registry-warning ha-icon { flex: none; }
 .registry-warning p { color: inherit; margin: 2px 0 0; }
+.hero .scan-time { margin-top: 11px; }
 .export-help { border: 0; margin-top: 7px; }
 .export-help summary { display: block; width: fit-content; color: #b7eee9; padding: 3px 0; text-decoration: underline; }
 .export-help summary:hover { background: transparent; }
@@ -58,6 +59,7 @@ input, select { border: 1px solid var(--border); background: var(--surface); }
 .stamp { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px 16px; margin: 21px 0 11px; color: var(--muted); }
 .stamp span { min-width: 0; overflow-wrap: anywhere; }
 .metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.metrics.single { grid-template-columns: minmax(0, 1fr); }
 .metric, .composition, .table, .empty { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; }
 .metric { min-width: 0; display: grid; align-content: start; gap: 3px; padding: clamp(12px, 2vw, 20px); }
 .metric > span { font-weight: 650; }

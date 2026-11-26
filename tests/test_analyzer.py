@@ -7,6 +7,7 @@ from pathlib import Path
 import sys
 import tarfile
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -77,6 +78,31 @@ def tar_bytes(entries):
 
 
 class ImageSourceTests(unittest.TestCase):
+    def test_container_report_counts_visible_files_once_and_excludes_mount_paths(self):
+        with TemporaryDirectory() as work:
+            root = Path(work)
+            integration = root / "usr/src/homeassistant/homeassistant/components/demo"
+            integration.mkdir(parents=True)
+            component = integration / "__init__.py"
+            component.write_bytes(b"test")
+            alias = integration / "copy.py"
+            alias.write_bytes(b"test")
+            mounted = root / "config"
+            mounted.mkdir()
+            (mounted / "state.db").write_bytes(b"test database")
+            injected = root / "resolv.conf"
+            injected.write_bytes(b"managed by Docker")
+            lstat = Path.lstat
+            info = component.lstat()
+            shared_inode = SimpleNamespace(st_mode=info.st_mode, st_size=info.st_size, st_nlink=2,
+                                           st_dev=info.st_dev, st_ino=info.st_ino)
+            with patch.object(Path, "lstat", lambda item: shared_inode if item in (component, alias) else lstat(item)):
+                files, metadata = analyzer.read_filesystem(root, {mounted, injected})
+            report = analyzer.summarize("fixture", "", "arm64", "container", [], files, metadata)
+        self.assertEqual(report["totals"], {"visible": 4})
+        self.assertEqual(report["layers"], [])
+        self.assertEqual([(group["category"], group["name"]) for group in report["groups"]], [("integration", "demo")])
+
     def test_docker_archive_accounts_for_plain_and_compressed_layers_offline(self):
         base = tar_bytes([("opt/tool", b"lower"), ("opt/keep", b"unchanged")])
         top = tar_bytes([("opt/tool", b"upper layer")])

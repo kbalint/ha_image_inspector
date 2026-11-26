@@ -2,7 +2,7 @@
 
 [Magyar leírás](README.hu.md)
 
-HA Image Inspector adds an administrator-only sidebar panel for local Docker images and official Home Assistant Container registry images. Find the biggest built-in integrations, Python packages and system libraries, see the largest files in each group, or inspect individual build layers.
+HA Image Inspector adds an administrator-only sidebar panel that measures the running Home Assistant build from inside its container. Find the biggest built-in integrations, Python packages and system libraries, or inspect individual layers using a Docker archive or the official registry.
 
 ![HA Image Inspector showing the official ARM64 image](docs/images/panel.png)
 
@@ -11,11 +11,15 @@ HA Image Inspector adds an administrator-only sidebar panel for local Docker ima
 1. In HACS, open **Custom repositories** and add `https://github.com/kbalint/ha_image_inspector` as an **Integration**.
 2. Download **HA Image Inspector** and restart Home Assistant.
 3. In **Settings → Devices & services → Add integration**, select **HA Image Inspector**.
-4. Open **HA Image Inspector** in the sidebar and select **Analyze image**.
+4. Open **HA Image Inspector** in the sidebar and select **Scan running container**.
 
 For manual installation, copy `custom_components/ha_image_inspector` from the release into your Home Assistant configuration directory under `custom_components`, then continue from Step 2. The integration requires Home Assistant 2026.11 or later.
 
-## Analyze a local Docker image offline
+## Scan the running container
+
+The integration reads the running build's visible files from inside Home Assistant. It excludes mounted volumes, including `/config`, and counts hard-linked files once. This mode has zero registry traffic and needs no export or Docker socket. It measures the visible filesystem, including changes in the writable layer. For overwritten files and layer sizes, use a Docker archive or the registry.
+
+## Analyze a local Docker archive offline
 
 On the Docker host, export the image ID of your running container. Replace `/path/to/ha-config` with the host directory mounted at `/config` and `homeassistant` with your container name.
 
@@ -24,7 +28,7 @@ image_id=$(docker container inspect --format '{{.Image}}' homeassistant)
 docker image save --output /path/to/ha-config/ha_image_inspector.tar "$image_id"
 ```
 
-Select **Local Docker image** in the panel and click **Analyze image**. Home Assistant reads that fixed filename from its configuration directory. Use an uncompressed outer tar with one image and one platform. The export takes temporary local disk space. Once the report is saved, you can remove the tar. The offline workflow makes zero registry requests and requires no Docker socket in the Home Assistant container.
+Under **Local container**, expand **Analyze a Docker archive by layer** and click **Analyze local archive**. Home Assistant reads that fixed filename from its configuration directory. Use an uncompressed outer tar with one image and one platform. The export takes temporary local disk space. Once the report is saved, you can remove the tar.
 
 ## Analyze an official registry image
 
@@ -35,7 +39,7 @@ image_id=$(docker container inspect --format '{{.Image}}' homeassistant)
 docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$image_id"
 ```
 
-Use the digest after `@` from the official repository entry. This mode needs outbound HTTPS to GHCR and its blob storage. It streams every compressed layer, so a scan can transfer several hundred megabytes. The integration saves the most recent successful report from either mode and opens it without fetching the layers again.
+Use the digest after `@` from the official repository entry. This mode needs outbound HTTPS to GHCR and its blob storage. It streams every compressed layer, so a scan can transfer several hundred megabytes. The integration saves the most recent successful report and opens it without fetching the layers again.
 
 ## Read the totals
 

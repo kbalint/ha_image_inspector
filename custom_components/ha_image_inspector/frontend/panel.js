@@ -1,17 +1,23 @@
 const strings = {
   en: {
     subtitle: 'Storage breakdown for a local Docker image or an official registry image.',
-    source: 'Image source', local: 'Local Docker image', registry: 'Official registry',
-    localHint: 'Save the existing image as ha_image_inspector.tar in your Home Assistant configuration folder.',
-    localHelp: 'Export command for the Docker host',
+    source: 'Image source', local: 'Local container', registry: 'Official registry',
+    container: 'Running container', archive: 'Local Docker archive',
+    containerHint: 'Scan the Home Assistant build from inside the running container. No image download or export is needed.',
+    containerScan: 'Scan running container', containerOpening: 'Reading files in the running container…',
+    container_required: 'This scan is available inside a Docker or Podman container.',
+    containerVisibleHelp: 'Regular files in the running container, excluding mounts',
+    localHint: 'For layer-by-layer analysis, save the image as ha_image_inspector.tar in the Home Assistant configuration folder.',
+    localHelp: 'Analyze a Docker archive by layer', archiveScan: 'Analyze local archive',
     localPath: 'Replace /path/to/ha-config with the host directory mounted at /config, and homeassistant with your container name.',
     archive_missing: 'The Home Assistant configuration folder does not contain ha_image_inspector.tar.',
     archived: 'Archived layers', archivedHelp: 'Layer data as stored in the local export', opening: 'Opening the image archive…',
     registryWarning: 'Registry mode uses additional internet data',
     registryHint: 'Starting an analysis downloads the image layers from the registry and can use several hundred MB.',
+    scanTime: 'Analysis might take some time.',
     registryScan: 'Download and analyze', registryLayer: 'Downloading and reading layer',
     localLayer: 'Reading layer', finishing: 'Preparing the report…',
-    reference: 'Image tag or SHA-256 digest', architecture: 'Architecture', scan: 'Analyze image',
+    reference: 'Image tag or SHA-256 digest', architecture: 'Architecture',
     resolving: 'Resolving the image manifest…',
     empty: 'Analyze an image to see which integrations, packages and system files take up space.',
     error: 'Analysis failed', compressed: 'Registry download', tar: 'Unpacked layer archives',
@@ -26,21 +32,28 @@ const strings = {
     layerCaption: 'Base layer first. Select a layer to see its digest and build command.',
     attribution: 'Package ownership comes from Python installation records where available. Shared dependencies appear under their package names.',
     about: 'The report covers the selected image layers. Container changes, mounted volumes and Docker storage-driver overhead are outside this measurement.',
+    aboutContainer: 'This scan measures files visible inside the running container, including changes in its writable layer. Mounts and overwritten lower-layer files are outside this measurement.',
     more: 'Show more', menu: 'Open sidebar', of: 'of',
   },
   hu: {
     subtitle: 'Helyi Docker image vagy hivatalos registry-image tárhelybontása.',
-    source: 'Image forrása', local: 'Helyi Docker image', registry: 'Hivatalos registry',
-    localHint: 'Mentsd a meglévő image-et ha_image_inspector.tar néven a Home Assistant konfigurációs mappájába.',
-    localHelp: 'Exportparancs a Docker hosthoz',
+    source: 'Image forrása', local: 'Helyi konténer', registry: 'Hivatalos registry',
+    container: 'Futó konténer', archive: 'Helyi Docker-archívum',
+    containerHint: 'A Home Assistant saját, futó buildjét méri fel a konténeren belül. Ehhez nem kell image-letöltés vagy export.',
+    containerScan: 'Futó konténer elemzése', containerOpening: 'A futó konténer fájljainak beolvasása…',
+    container_required: 'Ez a mérés Docker- vagy Podman-konténerben érhető el.',
+    containerVisibleHelp: 'A futó konténer normál fájljai, a csatolt kötetek nélkül',
+    localHint: 'A rétegenkénti elemzéshez mentsd az image-et ha_image_inspector.tar néven a Home Assistant konfigurációs mappájába.',
+    localHelp: 'Docker-archívum elemzése rétegenként', archiveScan: 'Helyi archívum elemzése',
     localPath: 'A /path/to/ha-config helyére a /config alá csatolt hostmappa kerüljön, a homeassistant helyére pedig a konténer neve.',
     archive_missing: 'A Home Assistant konfigurációs mappájában nincs ha_image_inspector.tar fájl.',
     archived: 'Archivált rétegek', archivedHelp: 'A rétegek mérete a helyi exportban', opening: 'Image-archívum megnyitása…',
     registryWarning: 'A registry mód plusz internetes adatforgalmat generál',
     registryHint: 'Az elemzés indításakor a Home Assistant letölti az image rétegeit. Ez több száz MB is lehet.',
+    scanTime: 'Az elemzés eltarthat egy ideig.',
     registryScan: 'Letöltés és elemzés', registryLayer: 'Réteg letöltése és beolvasása',
     localLayer: 'Réteg beolvasása', finishing: 'Jelentés összeállítása…',
-    reference: 'Image-tag vagy SHA-256 digest', architecture: 'Architektúra', scan: 'Image elemzése',
+    reference: 'Image-tag vagy SHA-256 digest', architecture: 'Architektúra',
     resolving: 'Image-manifest beolvasása…',
     empty: 'Indíts elemzést, hogy lásd, melyik integráció, csomag és rendszerfájl foglalja a helyet.',
     error: 'Az elemzés sikertelen', compressed: 'Registry-letöltés', tar: 'Kibontott rétegarchívumok',
@@ -55,6 +68,7 @@ const strings = {
     layerCaption: 'Az alapréteg van elöl. A digest és a buildparancs a réteg megnyitásával látható.',
     attribution: 'A Python-csomagokhoz a telepítési jegyzék rendeli a fájlokat, ahol elérhető. A megosztott függőségek a saját csomagnevük alatt látszanak.',
     about: 'A mérés a kiválasztott image rétegeire vonatkozik. A konténer változásai, a csatolt kötetek és a Docker tárolódriverének többlete kívül esnek rajta.',
+    aboutContainer: 'A mérés a futó konténerben látható fájlokat számolja, az írható réteg módosításaival együtt. A mountok és az alsó rétegek elfedett fájljai kívül esnek a mérésen.',
     more: 'További találatok', menu: 'Oldalsáv megnyitása', of: '/',
   },
 };
@@ -130,7 +144,7 @@ class ImageInspectorPanel extends HTMLElement {
   render() {
     const t = this.t;
     const previous = this.shadowRoot.querySelector('#registry-form');
-    const registryReport = this.report?.source !== 'local' ? this.report : null;
+    const registryReport = this.report && (!this.report.source || this.report.source === 'registry') ? this.report : null;
     const reference = previous?.elements.reference.value || registryReport?.reference || this.state?.default_reference || '';
     const architecture = (previous?.elements.reference.value && previous.elements.architecture.value) || registryReport?.architecture || this.state?.default_architecture || 'amd64';
     this.shadowRoot.innerHTML = `
@@ -142,11 +156,12 @@ class ImageInspectorPanel extends HTMLElement {
           <h1>HA Image Inspector</h1><p>${t.subtitle}</p></div>
           <div class="source" role="group" aria-label="${t.source}">${['local', 'registry'].map(mode => `<button type="button" data-mode="${mode}">${t[mode]}</button>`).join('')}</div>
           <div id="local-source">
-            <p>${t.localHint}</p>
-            <details class="export-help"><summary>${t.localHelp}</summary><p>${t.localPath}</p>
+            <p>${t.containerHint}</p>
+            <button class="primary" id="container-scan" type="button"><ha-icon icon="mdi:magnify"></ha-icon>${t.containerScan}</button>
+            <details class="export-help"><summary>${t.localHelp}</summary><p>${t.localHint}</p><p>${t.localPath}</p>
               <pre>image_id=$(docker container inspect --format '{{.Image}}' homeassistant)
-docker image save --output /path/to/ha-config/ha_image_inspector.tar "$image_id"</pre></details>
-            <button class="primary" id="local-scan" type="button"><ha-icon icon="mdi:magnify"></ha-icon>${t.scan}</button>
+docker image save --output /path/to/ha-config/ha_image_inspector.tar "$image_id"</pre>
+              <button class="primary" id="local-scan" type="button">${t.archiveScan}</button></details>
           </div>
           <div id="registry-source">
           <div class="registry-warning"><ha-icon icon="mdi:alert-outline" aria-hidden="true"></ha-icon><div><strong>${t.registryWarning}</strong><p>${t.registryHint}</p></div></div>
@@ -156,15 +171,17 @@ docker image save --output /path/to/ha-config/ha_image_inspector.tar "$image_id"
             <button class="primary" type="submit"><ha-icon icon="mdi:download-outline"></ha-icon>${t.registryScan}</button>
           </form>
           </div>
+          <p class="scan-time">${t.scanTime}</p>
           <div id="status" role="status" aria-live="polite"></div>
         </section>
         ${this.report ? this.summary() : `<div class="empty">${t.empty}</div>`}
-        <footer>${t.about}</footer>
+        <footer>${this.report?.source === 'container' ? t.aboutContainer : t.about}</footer>
       </main>`;
     this.shadowRoot.querySelector('.menu').onclick = () => this.dispatchEvent(new Event('hass-toggle-menu', {bubbles: true, composed: true}));
     this.shadowRoot.querySelectorAll('[data-mode]').forEach(button => {
       button.onclick = () => { this.mode = button.dataset.mode; this.renderMode(); };
     });
+    this.shadowRoot.querySelector('#container-scan').onclick = () => this.request({source: 'container'});
     this.shadowRoot.querySelector('#local-scan').onclick = () => this.request({source: 'local'});
     this.shadowRoot.querySelector('#registry-form').onsubmit = event => {
       event.preventDefault();
@@ -193,12 +210,12 @@ docker image save --output /path/to/ha-config/ha_image_inspector.tar "$image_id"
       box.textContent = `${this.t.error} · ${this.t[error] || error}`;
       return;
     }
-    const local = (progress?.source || this.scanSource) === 'local';
+    const source = progress?.source || this.scanSource;
     let status = '';
     if (progress) {
-      if (!progress.total) status = local ? this.t.opening : this.t.resolving;
+      if (!progress.total) status = {container: this.t.containerOpening, local: this.t.opening}[source] || this.t.resolving;
       else if (progress.done === progress.total) status = this.t.finishing;
-      else status = `${local ? this.t.localLayer : this.t.registryLayer} ${progress.done + 1} ${this.t.of} ${progress.total}`;
+      else status = `${source === 'local' ? this.t.localLayer : this.t.registryLayer} ${progress.done + 1} ${this.t.of} ${progress.total}`;
       if (progress.download_total) status += ` · ${this.format(progress.downloaded)} / ${this.format(progress.download_total)}`;
     }
     box.textContent = status;
@@ -208,12 +225,14 @@ docker image save --output /path/to/ha-config/ha_image_inspector.tar "$image_id"
     const {totals, groups, digest, reference, architecture, generated} = this.report;
     const t = this.t;
     const source = this.report.source || 'registry';
-    const numbers = {[source === 'local' ? 'archived' : 'compressed']: totals.compressed, tar: totals.tar, visible: totals.visible, hidden: totals.written - totals.visible};
+    const container = source === 'container';
+    const numbers = container ? {visible: totals.visible} :
+      {[source === 'local' ? 'archived' : 'compressed']: totals.compressed, tar: totals.tar, visible: totals.visible, hidden: totals.written - totals.visible};
     const date = new Intl.DateTimeFormat(this.language, {dateStyle: 'medium', timeStyle: 'short'}).format(new Date(generated));
     const mix = categories.map(category => ({category, bytes: groups.filter(row => row.category === category).reduce((sum, row) => sum + row.bytes, 0)})).filter(row => row.bytes);
     const tag = reference.startsWith('sha256:') ? '' : `${escape(reference)} · `;
-    return `<div class="stamp"><span>${t[source]} · ${tag}linux/${escape(architecture)} · ${date}</span><code title="${escape(digest)}">${escape(digest.slice(0, 23))}</code></div>
-      <section class="metrics">${Object.entries(numbers).map(([key, value]) => `<article class="metric ${key}"><span>${t[key]}</span><strong>${this.format(value)}</strong><small>${t[`${key}Help`]}</small></article>`).join('')}</section>
+    return `<div class="stamp"><span>${source === 'local' ? t.archive : t[source]} · ${tag}linux/${escape(architecture)} · ${date}</span>${digest ? `<code title="${escape(digest)}">${escape(digest.slice(0, 23))}</code>` : ''}</div>
+      <section class="metrics ${container ? 'single' : ''}">${Object.entries(numbers).map(([key, value]) => `<article class="metric ${key}"><span>${t[key]}</span><strong>${this.format(value)}</strong><small>${container ? t.containerVisibleHelp : t[`${key}Help`]}</small></article>`).join('')}</section>
       <div class="composition"><div class="stripe">${mix.map(row => `<span class="${row.category}" style="flex:${row.bytes}" title="${t[row.category]} · ${this.format(row.bytes)}"></span>`).join('')}</div>
       <div class="legend">${mix.map(row => `<span><i class="${row.category}"></i>${t[row.category]}</span>`).join('')}</div></div>
       <section class="table" id="table"></section>`;
@@ -222,7 +241,9 @@ docker image save --output /path/to/ha-config/ha_image_inspector.tar "$image_id"
   renderTable() {
     const t = this.t;
     const table = this.shadowRoot.querySelector('#table');
-    table.innerHTML = `<div class="table-header"><div class="tabs">${['components', 'layers'].map(tab => `<button type="button" data-tab="${tab}" aria-pressed="${this.tab === tab}">${t[tab]}</button>`).join('')}</div>
+    const tabs = this.report.source === 'container' ? ['components'] : ['components', 'layers'];
+    if (!tabs.includes(this.tab)) this.tab = 'components';
+    table.innerHTML = `<div class="table-header"><div class="tabs">${tabs.map(tab => `<button type="button" data-tab="${tab}" aria-pressed="${this.tab === tab}">${t[tab]}</button>`).join('')}</div>
       ${this.tab === 'components' ? `<div class="filters"><input type="search" aria-label="${t.filter}" placeholder="${t.filter}" value="${escape(this.query)}"><select aria-label="${t.all}">${['', ...categories].map(category => `<option value="${category}" ${category === this.category ? 'selected' : ''}>${category ? t[category] : t.all}</option>`).join('')}</select></div>` : ''}</div>
       <p class="caption">${this.tab === 'components' ? t.attribution : t.layerCaption}</p><div id="rows"></div>`;
     table.querySelectorAll('[data-tab]').forEach(button => {

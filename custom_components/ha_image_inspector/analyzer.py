@@ -8,10 +8,12 @@ import gzip
 import hashlib
 import io
 import json
-from pathlib import PurePosixPath
+import os
+from pathlib import Path, PurePosixPath
 import platform
 import posixpath
 import re
+import stat
 import tarfile
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -91,6 +93,12 @@ def image_path(path):
     return path
 
 
+def metadata_file(path, size):
+    if path.endswith(".dist-info/RECORD"):
+        return size <= 16 * 1024 * 1024
+    return path.endswith("/manifest.json") and size <= 256 * 1024 and classify(path, None)[0] == "integration"
+
+
 def read_layer(tar, index, files, metadata):
     """Apply whiteouts to lower layers, then replay the current layer's entries."""
     entries = []
@@ -108,9 +116,7 @@ def read_layer(tar, index, files, metadata):
             whiteouts.add(posixpath.join(parent, name[4:]))
         elif member.isfile():
             content = None
-            is_record = path.endswith(".dist-info/RECORD") and member.size <= 16 * 1024 * 1024
-            is_manifest = path.endswith("/manifest.json") and member.size <= 256 * 1024 and classify(path, None)[0] == "integration"
-            if is_record or is_manifest:
+            if metadata_file(path, member.size):
                 content = tar.extractfile(member).read().decode("utf-8", errors="replace")
             entries.append((path, "file", Payload(member.size, index), content))
             written += member.size
@@ -371,6 +377,46 @@ def analyze_archive(path, progress=lambda *_: None):
     return summarize(names[0] if names else digest, digest, config["architecture"], "local", layers, files, metadata)
 
 
+def read_filesystem(root, excluded):
+    """Count visible regular file contents without crossing any listed mounts."""
+    files, metadata, hardlinks = {}, {}, {}
+    for directory, children, names in os.walk(root):
+        parent = Path(directory)
+        children[:] = [name for name in children if parent / name not in excluded]
+        for name in names:
+            item = parent / name
+            if item in excluded:
+                continue
+            try:
+                info = item.lstat()
+                if not stat.S_ISREG(info.st_mode):
+                    continue
+                path = item.relative_to(root).as_posix()
+                payload = Payload(info.st_size, 0)
+                if info.st_nlink > 1:
+                    payload = hardlinks.setdefault((info.st_dev, info.st_ino), payload)
+                files[path] = payload
+                if metadata_file(path, info.st_size):
+                    metadata[path] = item.read_text(encoding="utf-8", errors="replace")
+            except (FileNotFoundError, PermissionError):
+                continue
+    return files, metadata
+
+
+def analyze_container(reference, config_dir="/config"):
+    """Scan the running HA container, leaving mounted volumes and pseudo-filesystems out."""
+    if not any(Path(marker).is_file() for marker in ("/.dockerenv", "/run/.containerenv")):
+        raise ValueError("container_required")
+    excluded = {Path(config_dir).resolve(), *(Path(path) for path in
+                ("/dev", "/proc", "/sys", "/.dockerenv", "/run/.containerenv"))}
+    for line in Path("/proc/self/mountinfo").read_text(encoding="utf-8").splitlines():
+        mount = re.sub(r"\\([0-7]{3})", lambda match: chr(int(match[1], 8)), line.split()[4])
+        if mount != "/":
+            excluded.add(Path(mount))
+    files, metadata = read_filesystem(Path("/"), excluded)
+    return summarize(reference, "", host_architecture(), "container", [], files, metadata)
+
+
 def summarize(reference, digest, architecture, source, layers, files, metadata):
     owners = package_owners({path: value for path, value in metadata.items() if path.endswith(".dist-info/RECORD")})
     groups = {}
@@ -379,7 +425,8 @@ def summarize(reference, digest, architecture, source, layers, files, metadata):
         if payload in seen:
             continue
         seen.add(payload)
-        layers[payload.layer]["visible"] += payload.size
+        if layers:
+            layers[payload.layer]["visible"] += payload.size
         category, name = classify(path, owners.get(path))
         group = groups.setdefault((category, name), {"category": category, "name": name, "bytes": 0, "files": 0, "largest": []})
         group["bytes"] += payload.size
@@ -388,9 +435,12 @@ def summarize(reference, digest, architecture, source, layers, files, metadata):
             group["largest"].append({"path": "/" + path, "bytes": payload.size})
 
     link_requirements(groups, metadata)
+    totals = {key: sum(layer[key] for layer in layers) for key in ("compressed", "tar", "written", "visible")}
+    if source == "container":
+        totals = {"visible": sum(group["bytes"] for group in groups.values())}
     return {"generated": datetime.now(timezone.utc).isoformat(), "reference": reference, "source": source,
             "digest": digest, "architecture": architecture, "layers": layers,
-            "totals": {key: sum(layer[key] for layer in layers) for key in ("compressed", "tar", "written", "visible")},
+            "totals": totals,
             "groups": sorted(groups.values(), key=lambda group: (-group["bytes"], group["name"]))}
 
 
@@ -399,7 +449,13 @@ if __name__ == "__main__":
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("reference", nargs="?", help="Official Home Assistant image tag or manifest digest")
     source.add_argument("--archive", help="Inspect a local docker image save tar archive")
+    source.add_argument("--container", metavar="LABEL", help="Read visible files inside the running container")
     parser.add_argument("--architecture", choices=("arm64", "amd64"), default=host_architecture())
     args = parser.parse_args()
-    result = analyze_archive(args.archive) if args.archive else analyze(args.reference, args.architecture)
+    if args.container is not None:
+        result = analyze_container(args.container)
+    elif args.archive:
+        result = analyze_archive(args.archive)
+    else:
+        result = analyze(args.reference, args.architecture)
     print(json.dumps(result))
