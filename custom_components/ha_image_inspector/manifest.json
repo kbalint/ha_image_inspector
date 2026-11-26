@@ -8,5 +8,5 @@
   "integration_type": "service",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/kbalint/ha_image_inspector/issues",
-  "version": "0.1.0"
+  "version": "0.2.0"
 }

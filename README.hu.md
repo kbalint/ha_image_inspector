@@ -2,7 +2,7 @@
 
 [English documentation](README.md)
 
-A Home Assistant adminisztrátori oldalsávjában megmutatja a hivatalos Container image tárhelybontását. Külön kereshetők a beépített integrációk, a Python-csomagok és a rendszereszközök. A sorok kibontva a legnagyobb fájlokat, a Rétegek fül pedig a buildlépések méretét mutatja.
+A Home Assistant adminisztrátori oldalsávjában megmutatja egy helyi Docker image vagy a hivatalos Container image tárhelybontását. Külön kereshetők a beépített integrációk, a Python-csomagok és a rendszereszközök. A sorok kibontva a legnagyobb fájlokat, a Rétegek fül pedig a buildlépések méretét mutatja.
 
 ## HACS-telepítés
 
@@ -11,22 +11,36 @@ A Home Assistant adminisztrátori oldalsávjában megmutatja a hivatalos Contain
 3. A **Beállítások → Eszközök és szolgáltatások → Integráció hozzáadása** alatt válaszd a **HA Image Inspector** integrációt.
 4. Nyisd meg az oldalsávban a **HA Image Inspector** panelt, és kattints az **Image elemzése** gombra.
 
-Kézi telepítéshez a kiadás csomagjából másold a `custom_components/ha_image_inspector` mappát a Home Assistant konfigurációs könyvtárának `custom_components` mappájába, majd folytasd a második lépéstől. A modulhoz legalább Home Assistant 2026.11 kell, valamint HTTPS-elérés a GHCR és a rétegeket kiszolgáló tárhely felé.
+Kézi telepítéshez a kiadás csomagjából másold a `custom_components/ha_image_inspector` mappát a Home Assistant konfigurációs könyvtárának `custom_components` mappájába, majd folytasd a második lépéstől. A modulhoz legalább Home Assistant 2026.11 kell.
 
-## Mit mér?
+## Helyi Docker image elemzése offline
 
-Alapértelmezésben a futó Home Assistant Core verziójának és architektúrájának megfelelő hivatalos registry-image-et vizsgálja. Másik tag vagy `sha256:…` manifest-digest is megadható. A helyi konténer image-digestjének ellenőrzéséhez a Docker hoston futtasd az alábbi parancsokat. Ha más a konténer neve, írd át a `homeassistant` értéket.
+A Docker hoston exportáld a futó konténer image-ét. A `/path/to/ha-config` helyére a konténer `/config` alá csatolt hostmappája kerüljön, a `homeassistant` helyére pedig a konténer neve.
+
+```sh
+image_id=$(docker container inspect --format '{{.Image}}' homeassistant)
+docker image save --output /path/to/ha-config/ha_image_inspector.tar "$image_id"
+```
+
+A panelen válaszd a **Helyi Docker image** módot és indítsd el az elemzést. A külső tar egyetlen image-et és platformot tartalmazzon. Az export átmenetileg helyet foglal a hoston. A jelentés mentése után törölheted. Ebben a módban nulla a registry-forgalom, és nincs szükség a Docker socket csatolására.
+
+## Hivatalos registry-image elemzése
+
+A **Hivatalos registry** módban alapból a futó Home Assistant Core verziója és architektúrája szerepel. Másik tag vagy `sha256:…` manifest-digest is megadható. A helyi konténer image-digestjének ellenőrzéséhez a Docker hoston futtasd az alábbi parancsokat. Ha más a konténer neve, írd át a `homeassistant` értéket.
 
 ```sh
 image_id=$(docker container inspect --format '{{.Image}}' homeassistant)
 docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$image_id"
 ```
 
-A hivatalos tároló sorából az `@` utáni digestet másold a panelbe. Egy elemzés több száz MB letöltést jelenthet. Az utolsó sikeres jelentést a Home Assistant elmenti.
+A hivatalos tároló sorából az `@` utáni digestet másold a panelbe. Egy registry-elemzés több száz MB letöltést jelenthet, és HTTPS-elérést igényel a GHCR és a rétegtárhely felé. A Home Assistant mindkét módban elmenti az utolsó sikeres jelentést.
+
+## Mit mér?
 
 | Mutató | Jelentés |
 | --- | --- |
 | Registry-letöltés | A kiválasztott platform tömörített rétegei |
+| Archivált rétegek | A rétegek mérete a helyi exportban, a külső tar fejlécei és az image metaadatai nélkül |
 | Kibontott rétegarchívumok | A kitömörített tar-adatfolyamok fejléccel és kitöltéssel együtt |
 | Látható fájlok | A kész image normál fájljainak mérete, a hard linkek közös tartalmát egyszer számolva |
 | Elfedezett fájlok | A törölt vagy felülírt fájlok alsó rétegekben megmaradt tartalma |

@@ -17,7 +17,16 @@ jobs:
         with:
           python-version: '3.14'
       - run: python -m unittest discover -s tests -v
-      - run: node --check custom_components/ha_image_inspector/frontend/panel.js
+      - run: node --input-type=module --check < custom_components/ha_image_inspector/frontend/panel.js
+      - name: Analyze a local Docker image
+        run: |
+          work=$(mktemp -d)
+          printf 'image fixture' > "$work/payload.txt"
+          printf 'FROM scratch\nCOPY payload.txt /payload.txt\n' > "$work/Dockerfile"
+          docker build --network=none --pull=false --tag image-inspector-fixture:ci "$work"
+          docker image save --output "$work/fixture.tar" image-inspector-fixture:ci
+          python custom_components/ha_image_inspector/analyzer.py --archive "$work/fixture.tar" > "$work/report.json"
+          jq -e '.source == "local" and .totals.visible == 13' "$work/report.json"
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')

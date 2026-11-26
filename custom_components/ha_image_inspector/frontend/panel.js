@@ -1,6 +1,13 @@
 const strings = {
   en: {
-    subtitle: 'Storage breakdown for the official Home Assistant Container image.',
+    subtitle: 'Storage breakdown for a local Docker image or an official registry image.',
+    source: 'Image source', local: 'Local Docker image', registry: 'Official registry',
+    localHint: 'Save the existing image as ha_image_inspector.tar in your Home Assistant configuration folder.',
+    localHelp: 'Export command for the Docker host',
+    localPath: 'Replace /path/to/ha-config with the host directory mounted at /config, and homeassistant with your container name.',
+    archive_missing: 'The Home Assistant configuration folder does not contain ha_image_inspector.tar.',
+    archived: 'Archived layers', archivedHelp: 'Layer data as stored in the local export', opening: 'Opening the image archive…',
+    registryHint: 'An analysis downloads the image layers from the registry. This can use several hundred MB.',
     reference: 'Image tag or SHA-256 digest', architecture: 'Architecture', scan: 'Analyze image',
     resolving: 'Resolving the image manifest…', scanning: 'Reading layers',
     empty: 'Analyze an image to see which integrations, packages and system files take up space.',
@@ -15,11 +22,18 @@ const strings = {
     requirements: 'Declared Python dependencies present in the image', usedBy: 'Declared directly by',
     layerCaption: 'Base layer first. Select a layer to see its digest and build command.',
     attribution: 'Package ownership comes from Python installation records where available. Shared dependencies appear under their package names.',
-    about: 'The official registry image is selected by tag or digest. Container changes, mounted volumes and Docker storage-driver overhead are outside this measurement.',
+    about: 'The report covers the selected image layers. Container changes, mounted volumes and Docker storage-driver overhead are outside this measurement.',
     more: 'Show more', menu: 'Open sidebar', of: 'of',
   },
   hu: {
-    subtitle: 'A hivatalos Home Assistant Container image tárhelybontása.',
+    subtitle: 'Helyi Docker image vagy hivatalos registry-image tárhelybontása.',
+    source: 'Image forrása', local: 'Helyi Docker image', registry: 'Hivatalos registry',
+    localHint: 'Mentsd a meglévő image-et ha_image_inspector.tar néven a Home Assistant konfigurációs mappájába.',
+    localHelp: 'Exportparancs a Docker hosthoz',
+    localPath: 'A /path/to/ha-config helyére a /config alá csatolt hostmappa kerüljön, a homeassistant helyére pedig a konténer neve.',
+    archive_missing: 'A Home Assistant konfigurációs mappájában nincs ha_image_inspector.tar fájl.',
+    archived: 'Archivált rétegek', archivedHelp: 'A rétegek mérete a helyi exportban', opening: 'Image-archívum megnyitása…',
+    registryHint: 'Az elemzés letölti az image rétegeit a registryből. Ez több száz MB forgalmat jelenthet.',
     reference: 'Image-tag vagy SHA-256 digest', architecture: 'Architektúra', scan: 'Image elemzése',
     resolving: 'Image-manifest beolvasása…', scanning: 'Rétegek beolvasása',
     empty: 'Indíts elemzést, hogy lásd, melyik integráció, csomag és rendszerfájl foglalja a helyet.',
@@ -34,7 +48,7 @@ const strings = {
     requirements: 'Az image-ben megtalálható közvetlen Python-függőségek', usedBy: 'Közvetlenül ezt használja',
     layerCaption: 'Az alapréteg van elöl. A digest és a buildparancs a réteg megnyitásával látható.',
     attribution: 'A Python-csomagokhoz a telepítési jegyzék rendeli a fájlokat, ahol elérhető. A megosztott függőségek a saját csomagnevük alatt látszanak.',
-    about: 'A mérés a hivatalos registry taggel vagy digesttel kiválasztott image-ére vonatkozik. A konténer változásai, a csatolt kötetek és a Docker tárolódriverének többlete kívül esnek rajta.',
+    about: 'A mérés a kiválasztott image rétegeire vonatkozik. A konténer változásai, a csatolt kötetek és a Docker tárolódriverének többlete kívül esnek rajta.',
     more: 'További találatok', menu: 'Oldalsáv megnyitása', of: '/',
   },
 };
@@ -47,6 +61,7 @@ class ImageInspectorPanel extends HTMLElement {
     super();
     this.attachShadow({mode: 'open'});
     this.tab = 'components';
+    this.mode = 'local';
     this.category = '';
     this.query = '';
     this.limit = 40;
@@ -78,8 +93,9 @@ class ImageInspectorPanel extends HTMLElement {
     if (this.pending) return;
     this.started = true;
     this.pending = true;
-    const form = this.shadowRoot.querySelector('form');
-    if (form) form.querySelector('button').disabled = true;
+    const form = this.shadowRoot.querySelector('#registry-form');
+    if (parameters.source) this.scanSource = parameters.source;
+    this.renderStatus();
     clearTimeout(this.timer);
     try {
       const state = await this._hass.callWS({type: 'ha_image_inspector/inspect', ...(this.report && {known: this.report.generated}), ...parameters});
@@ -107,9 +123,10 @@ class ImageInspectorPanel extends HTMLElement {
 
   render() {
     const t = this.t;
-    const previous = this.shadowRoot.querySelector('form');
-    const reference = previous?.elements.reference.value || this.report?.reference || this.state?.default_reference || '';
-    const architecture = (previous?.elements.reference.value && previous.elements.architecture.value) || this.report?.architecture || this.state?.default_architecture || 'amd64';
+    const previous = this.shadowRoot.querySelector('#registry-form');
+    const registryReport = this.report?.source !== 'local' ? this.report : null;
+    const reference = previous?.elements.reference.value || registryReport?.reference || this.state?.default_reference || '';
+    const architecture = (previous?.elements.reference.value && previous.elements.architecture.value) || registryReport?.architecture || this.state?.default_architecture || 'amd64';
     this.shadowRoot.innerHTML = `
       <link rel="stylesheet" href="${new URL('./panel.css', import.meta.url)}">
       <header class="toolbar"><button class="menu" type="button" aria-label="${t.menu}"><ha-icon icon="mdi:menu"></ha-icon></button><span>HA Image Inspector</span></header>
@@ -117,44 +134,69 @@ class ImageInspectorPanel extends HTMLElement {
         <section class="hero">
           <div class="hero-copy"><div class="mark"><ha-icon icon="mdi:layers-triple-outline"></ha-icon></div>
           <h1>HA Image Inspector</h1><p>${t.subtitle}</p></div>
-          <form>
+          <div class="source" role="group" aria-label="${t.source}">${['local', 'registry'].map(mode => `<button type="button" data-mode="${mode}">${t[mode]}</button>`).join('')}</div>
+          <div id="local-source">
+            <p>${t.localHint}</p>
+            <details class="export-help"><summary>${t.localHelp}</summary><p>${t.localPath}</p>
+              <pre>image_id=$(docker container inspect --format '{{.Image}}' homeassistant)
+docker image save --output /path/to/ha-config/ha_image_inspector.tar "$image_id"</pre></details>
+            <button class="primary" id="local-scan" type="button"><ha-icon icon="mdi:magnify"></ha-icon>${t.scan}</button>
+          </div>
+          <div id="registry-source">
+          <p>${t.registryHint}</p>
+          <form id="registry-form">
             <label>${t.reference}<input name="reference" value="${escape(reference)}" required maxlength="135" spellcheck="false"></label>
             <label>${t.architecture}<select name="architecture"><option>amd64</option><option ${architecture === 'arm64' ? 'selected' : ''}>arm64</option></select></label>
             <button class="primary" type="submit"><ha-icon icon="mdi:magnify"></ha-icon>${t.scan}</button>
           </form>
+          </div>
           <div id="status" role="status" aria-live="polite"></div>
         </section>
         ${this.report ? this.summary() : `<div class="empty">${t.empty}</div>`}
         <footer>${t.about}</footer>
       </main>`;
     this.shadowRoot.querySelector('.menu').onclick = () => this.dispatchEvent(new Event('hass-toggle-menu', {bubbles: true, composed: true}));
-    this.shadowRoot.querySelector('form').onsubmit = event => {
+    this.shadowRoot.querySelectorAll('[data-mode]').forEach(button => {
+      button.onclick = () => { this.mode = button.dataset.mode; this.renderMode(); };
+    });
+    this.shadowRoot.querySelector('#local-scan').onclick = () => this.request({source: 'local'});
+    this.shadowRoot.querySelector('#registry-form').onsubmit = event => {
       event.preventDefault();
       const fields = event.currentTarget.elements;
-      this.request({reference: fields.reference.value.trim(), architecture: fields.architecture.value});
+      this.request({source: 'registry', reference: fields.reference.value.trim(), architecture: fields.architecture.value});
     };
+    this.renderMode();
     this.renderStatus();
     if (this.report) this.renderTable();
+  }
+
+  renderMode() {
+    this.shadowRoot.querySelectorAll('[data-mode]').forEach(button => {
+      button.setAttribute('aria-pressed', button.dataset.mode === this.mode);
+      this.shadowRoot.querySelector(`#${button.dataset.mode}-source`).hidden = button.dataset.mode !== this.mode;
+    });
   }
 
   renderStatus() {
     const box = this.shadowRoot.querySelector('#status');
     if (!box) return;
     const {progress, error} = this.state || {};
-    this.shadowRoot.querySelector('form button').disabled = this.pending || !!progress;
+    this.shadowRoot.querySelectorAll('.primary').forEach(button => { button.disabled = this.pending || !!progress; });
     box.className = error ? 'error' : '';
-    box.textContent = error ? `${this.t.error} · ${error}` : progress?.total
-      ? `${this.t.scanning} ${progress.done} ${this.t.of} ${progress.total}` : progress ? this.t.resolving : '';
+    box.textContent = error ? `${this.t.error} · ${this.t[error] || error}` : progress?.total
+      ? `${this.t.scanning} ${progress.done} ${this.t.of} ${progress.total}` : progress
+        ? (progress.source || this.scanSource) === 'local' ? this.t.opening : this.t.resolving : '';
   }
 
   summary() {
     const {totals, groups, digest, reference, architecture, generated} = this.report;
     const t = this.t;
-    const numbers = {compressed: totals.compressed, tar: totals.tar, visible: totals.visible, hidden: totals.written - totals.visible};
+    const source = this.report.source || 'registry';
+    const numbers = {[source === 'local' ? 'archived' : 'compressed']: totals.compressed, tar: totals.tar, visible: totals.visible, hidden: totals.written - totals.visible};
     const date = new Intl.DateTimeFormat(this.language, {dateStyle: 'medium', timeStyle: 'short'}).format(new Date(generated));
     const mix = categories.map(category => ({category, bytes: groups.filter(row => row.category === category).reduce((sum, row) => sum + row.bytes, 0)})).filter(row => row.bytes);
     const tag = reference.startsWith('sha256:') ? '' : `${escape(reference)} · `;
-    return `<div class="stamp"><span>${tag}linux/${escape(architecture)} · ${date}</span><code title="${escape(digest)}">${escape(digest.slice(0, 23))}</code></div>
+    return `<div class="stamp"><span>${t[source]} · ${tag}linux/${escape(architecture)} · ${date}</span><code title="${escape(digest)}">${escape(digest.slice(0, 23))}</code></div>
       <section class="metrics">${Object.entries(numbers).map(([key, value]) => `<article class="metric ${key}"><span>${t[key]}</span><strong>${this.format(value)}</strong><small>${t[`${key}Help`]}</small></article>`).join('')}</section>
       <div class="composition"><div class="stripe">${mix.map(row => `<span class="${row.category}" style="flex:${row.bytes}" title="${t[row.category]} · ${this.format(row.bytes)}"></span>`).join('')}</div>
       <div class="legend">${mix.map(row => `<span><i class="${row.category}"></i>${t[row.category]}</span>`).join('')}</div></div>
@@ -182,8 +224,9 @@ class ImageInspectorPanel extends HTMLElement {
     const rows = this.shadowRoot.querySelector('#rows');
     const t = this.t;
     if (this.tab === 'layers') {
+      const stored = this.report.source === 'local' ? 'archived' : 'compressed';
       rows.innerHTML = layers.map((layer, index) => `<details><summary><span><strong>${t.layer} ${index + 1}</strong><small>${escape(layer.digest.slice(0, 23))}</small></span><b>${this.format(layer.tar)}</b></summary><div class="details">
-        <dl>${Object.entries({compressed: layer.compressed, payload: layer.written, visible: layer.visible, hidden: layer.written - layer.visible}).map(([key, value]) => `<div><dt>${t[key]}</dt><dd>${this.format(value)}</dd></div>`).join('')}</dl>
+        <dl>${Object.entries({[stored]: layer.compressed, payload: layer.written, visible: layer.visible, hidden: layer.written - layer.visible}).map(([key, value]) => `<div><dt>${t[key]}</dt><dd>${this.format(value)}</dd></div>`).join('')}</dl>
         <code>${escape(layer.digest)}</code>${layer.instruction ? `<pre>${escape(layer.instruction)}</pre>` : ''}</div></details>`).join('');
       return;
     }

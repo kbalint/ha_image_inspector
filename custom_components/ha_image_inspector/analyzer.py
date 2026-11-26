@@ -1,4 +1,4 @@
-"""Stream an official Home Assistant OCI image and account for its file payloads."""
+"""Account for file payloads in registry images and local Docker archives."""
 
 import argparse
 import csv
@@ -20,6 +20,7 @@ REGISTRY = "https://ghcr.io"
 REPOSITORY = "home-assistant/home-assistant"
 REFERENCE = re.compile(r"(?:[\w][\w.\-]{0,127}|sha256:[a-f0-9]{64})", re.ASCII)
 DIGEST = re.compile(r"sha256:[a-f0-9]{64}")
+LOCAL_ARCHIVE = "ha_image_inspector.tar"
 ARCHITECTURES = {"aarch64": "arm64", "arm64": "arm64", "x86_64": "amd64", "amd64": "amd64"}
 ACCEPT = ", ".join([
     "application/vnd.oci.image.index.v1+json",
@@ -241,6 +242,34 @@ def link_requirements(groups, metadata):
             package["related"].sort()
 
 
+def inspect_layer(source, media_type, index, files, metadata):
+    if media_type.endswith(("+gzip", ".gzip")):
+        stream = gzip.GzipFile(fileobj=source)
+    elif media_type.endswith("+zstd"):
+        from compression import zstd
+
+        stream = zstd.ZstdFile(source)
+    elif media_type.endswith(".tar"):
+        stream = None
+    else:
+        raise ValueError(f"Unsupported layer format: {media_type}")
+    decoded = CountedReader(stream or source, hashlib.sha256())
+    try:
+        with tarfile.open(fileobj=decoded, mode="r|") as tar:
+            written = read_layer(tar, index, files, metadata)
+        decoded.drain()
+    finally:
+        if stream is not None:
+            stream.close()
+    return {"compressed": source.count, "tar": decoded.count, "written": written, "visible": 0,
+            "diff_id": "sha256:" + decoded.digest.hexdigest()}
+
+
+def layer_instruction(config, index, count):
+    history = [item.get("created_by", "") for item in config.get("history", []) if not item.get("empty_layer")]
+    return history[index] if len(history) == count else ""
+
+
 def analyze(reference, architecture, progress=lambda *_: None):
     if not REFERENCE.fullmatch(reference) or architecture not in {"arm64", "amd64"}:
         raise ValueError("Expected an official image tag or sha256 digest and arm64 or amd64")
@@ -263,7 +292,6 @@ def analyze(reference, architecture, progress=lambda *_: None):
     config = json.loads(config_data)
     if (config.get("os"), config.get("architecture")) != ("linux", architecture):
         raise ValueError(f"The selected digest is not for linux/{architecture}")
-    history = [item.get("created_by", "") for item in config.get("history", []) if not item.get("empty_layer")]
     files, metadata, layers = {}, {}, []
     descriptors = manifest["layers"]
     for index, descriptor in enumerate(descriptors):
@@ -274,30 +302,65 @@ def analyze(reference, architecture, progress=lambda *_: None):
         media_type = descriptor["mediaType"]
         with registry.open(f"blobs/{layer_digest}") as response:
             compressed = CountedReader(response, hashlib.sha256())
-            if media_type.endswith(("+gzip", ".gzip")):
-                stream = gzip.GzipFile(fileobj=compressed)
-            elif media_type.endswith("+zstd"):
-                from compression import zstd
-
-                stream = zstd.ZstdFile(compressed)
-            elif media_type.endswith(".tar"):
-                stream = None
-            else:
-                raise ValueError(f"Unsupported layer format: {media_type}")
-            decoded = CountedReader(stream or compressed)
-            try:
-                with tarfile.open(fileobj=decoded, mode="r|") as tar:
-                    written = read_layer(tar, index, files, metadata)
-                decoded.drain()
-            finally:
-                if stream is not None:
-                    stream.close()
+            layer = inspect_layer(compressed, media_type, index, files, metadata)
             if compressed.count != descriptor["size"] or "sha256:" + compressed.digest.hexdigest() != layer_digest:
                 raise ValueError("Registry layer size or digest mismatch")
-        layers.append({"digest": layer_digest, "compressed": compressed.count, "tar": decoded.count,
-                       "written": written, "visible": 0, "instruction": history[index] if len(history) == len(descriptors) else ""})
-
+        layer.update(digest=layer_digest, instruction=layer_instruction(config, index, len(descriptors)))
+        layers.append(layer)
     progress(len(layers), len(layers))
+    return summarize(reference, digest, architecture, "registry", layers, files, metadata)
+
+
+def analyze_archive(path, progress=lambda *_: None):
+    """Read one Docker image export without extracting files or contacting a registry."""
+    files, metadata, layers = {}, {}, []
+    with tarfile.open(path, "r:") as archive:
+        def open_member(name):
+            member = archive.getmember(name)
+            if not member.isfile():
+                raise ValueError(f"Expected a regular Docker archive member: {name}")
+            return archive.extractfile(member)
+
+        try:
+            with open_member("manifest.json") as stream:
+                entries = json.load(stream)
+            if len(entries) != 1:
+                raise ValueError("Export one image and one platform with docker image save")
+            entry = entries[0]
+            with open_member(entry["Config"]) as stream:
+                config_data = stream.read()
+            config = json.loads(config_data)
+            if config.get("os") != "linux":
+                raise ValueError("The Docker archive must contain a Linux image")
+            digest = "sha256:" + hashlib.sha256(config_data).hexdigest()
+            names = entry.get("RepoTags") or []
+            descriptors = entry["Layers"]
+            diff_ids = config.get("rootfs", {}).get("diff_ids", [])
+            if len(diff_ids) != len(descriptors):
+                raise ValueError("Docker archive layer count differs from the image configuration")
+            for index, name in enumerate(descriptors):
+                progress(index, len(descriptors))
+                with open_member(name) as stream:
+                    magic = stream.read(4)
+                    stream.seek(0)
+                    media_type = "layer.tar"
+                    if magic.startswith(b"\x1f\x8b"):
+                        media_type += "+gzip"
+                    elif magic == b"\x28\xb5\x2f\xfd":
+                        media_type += "+zstd"
+                    layer = inspect_layer(CountedReader(stream), media_type, index, files, metadata)
+                # The config stores hashes of the uncompressed layer tar streams.
+                if layer["diff_id"] != diff_ids[index]:
+                    raise ValueError(f"Docker archive layer {index + 1} digest mismatch")
+                layer.update(digest=layer["diff_id"], instruction=layer_instruction(config, index, len(descriptors)))
+                layers.append(layer)
+        except (KeyError, TypeError, IndexError) as error:
+            raise ValueError("Invalid docker image save archive") from error
+    progress(len(layers), len(layers))
+    return summarize(names[0] if names else digest, digest, config["architecture"], "local", layers, files, metadata)
+
+
+def summarize(reference, digest, architecture, source, layers, files, metadata):
     owners = package_owners({path: value for path, value in metadata.items() if path.endswith(".dist-info/RECORD")})
     groups = {}
     seen = set()
@@ -314,7 +377,7 @@ def analyze(reference, architecture, progress=lambda *_: None):
             group["largest"].append({"path": "/" + path, "bytes": payload.size})
 
     link_requirements(groups, metadata)
-    return {"generated": datetime.now(timezone.utc).isoformat(), "reference": reference,
+    return {"generated": datetime.now(timezone.utc).isoformat(), "reference": reference, "source": source,
             "digest": digest, "architecture": architecture, "layers": layers,
             "totals": {key: sum(layer[key] for layer in layers) for key in ("compressed", "tar", "written", "visible")},
             "groups": sorted(groups.values(), key=lambda group: (-group["bytes"], group["name"]))}
@@ -322,7 +385,10 @@ def analyze(reference, architecture, progress=lambda *_: None):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("reference", help="Official Home Assistant image tag or manifest digest")
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("reference", nargs="?", help="Official Home Assistant image tag or manifest digest")
+    source.add_argument("--archive", help="Inspect a local docker image save tar archive")
     parser.add_argument("--architecture", choices=("arm64", "amd64"), default=host_architecture())
     args = parser.parse_args()
-    print(json.dumps(analyze(args.reference, args.architecture)))
+    result = analyze_archive(args.archive) if args.archive else analyze(args.reference, args.architecture)
+    print(json.dumps(result))

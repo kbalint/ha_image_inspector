@@ -34,6 +34,15 @@ main { max-width: 1250px; margin: auto; padding: clamp(16px, 3vw, 42px); }
 h1 { margin: 0; font-size: clamp(26px, 4vw, 45px); line-height: 1.05; letter-spacing: -.045em; }
 .hero p { margin: 5px 0 0; color: #c3dce1; }
 form { display: grid; grid-template-columns: minmax(170px, 1fr) auto auto; align-items: end; gap: 12px; margin-top: 26px; }
+.source { display: flex; flex-wrap: wrap; gap: 6px; margin: 23px 0 11px; }
+.source button { border: 1px solid #577b89; border-radius: 9px; background: #102d3b; padding: 8px 12px; }
+.source button[aria-pressed="true"] { background: #c9f2ef; border-color: #c9f2ef; color: #102f3a; font-weight: 700; }
+#local-source .primary { margin-top: 12px; }
+#registry-form { margin-top: 12px; }
+.export-help { border: 0; margin-top: 7px; }
+.export-help summary { display: block; width: fit-content; color: #b7eee9; padding: 3px 0; text-decoration: underline; }
+.export-help summary:hover { background: transparent; }
+.export-help pre { background: #102d3b; border-radius: 8px; padding: 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
 label { display: grid; gap: 5px; font-weight: 600; }
 input, select, .primary { border-radius: 9px; min-width: 0; padding: 9px 12px; min-height: 43px; }
 input, select { border: 1px solid var(--border); background: var(--surface); }

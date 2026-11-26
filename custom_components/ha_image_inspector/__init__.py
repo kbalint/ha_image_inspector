@@ -15,7 +15,7 @@ from homeassistant.components.http import StaticPathConfig
 from homeassistant.const import __version__ as HA_VERSION
 from homeassistant.helpers.storage import Store
 
-from .analyzer import REFERENCE, analyze, host_architecture
+from .analyzer import LOCAL_ARCHIVE, REFERENCE, analyze, analyze_archive, host_architecture
 
 DOMAIN = "ha_image_inspector"
 TITLE = "HA Image Inspector"
@@ -38,26 +38,32 @@ class Inspection:
         return {"report": report, "progress": self.progress, "error": self.error,
                 "default_reference": HA_VERSION, "default_architecture": host_architecture()}
 
-    async def run(self, reference, architecture):
+    async def run(self, source, reference, architecture):
         def report_progress(index, total):
             self.hass.loop.call_soon_threadsafe(update_progress, index, total)
 
         def update_progress(index, total):
-            self.progress = {"done": index, "total": total}
+            self.progress = {"done": index, "total": total, "source": source}
 
         try:
-            result = await self.hass.async_add_executor_job(partial(analyze, reference, architecture, report_progress))
-            self.report = result
+            if source == "local":
+                work = partial(analyze_archive, self.hass.config.path(LOCAL_ARCHIVE), report_progress)
+            else:
+                work = partial(analyze, reference, architecture, report_progress)
+            result = await self.hass.async_add_executor_job(work)
             await self.store.async_save(result)
+            self.report = result
         except asyncio.CancelledError:
             raise
         except Exception as error:
             # Registry redirects can carry signed URLs. Return the type and HTTP code only.
             code = getattr(error, "code", None)
             self.error = f"HTTP {code}" if code else type(error).__name__
-            if isinstance(error, ValueError):
+            if source == "local" and isinstance(error, FileNotFoundError):
+                self.error = "archive_missing"
+            elif isinstance(error, ValueError):
                 self.error = str(error)
-            _LOGGER.warning("Image inspection failed for %s (%s): %s", reference, architecture, self.error)
+            _LOGGER.warning("Image inspection failed (%s): %s", source, self.error)
         finally:
             self.progress = None
 
@@ -66,6 +72,7 @@ class Inspection:
     vol.Required("type"): f"{DOMAIN}/inspect",
     vol.Optional("reference"): str,
     vol.Optional("architecture"): str,
+    vol.Optional("source"): vol.In(["local", "registry"]),
     vol.Optional("known"): str,
 })
 @websocket_api.async_response
@@ -78,16 +85,17 @@ async def inspect(hass, connection, msg):
         connection.send_error(msg["id"], "not_loaded", "The integration is unloaded")
         return
     state = shared["inspection"]
-    if "reference" in msg:
-        reference = msg["reference"]
+    source = msg.get("source", "registry")
+    if source == "local" or "reference" in msg or "source" in msg:
+        reference = msg.get("reference", HA_VERSION)
         architecture = msg.get("architecture", host_architecture())
-        if not REFERENCE.fullmatch(reference) or architecture not in {"amd64", "arm64"}:
+        if source == "registry" and (not REFERENCE.fullmatch(reference) or architecture not in {"amd64", "arm64"}):
             connection.send_error(msg["id"], "invalid_format", "Use an official image tag or sha256 digest")
             return
         if state.task is None or state.task.done():
-            state.progress = {"done": 0, "total": 0}
+            state.progress = {"done": 0, "total": 0, "source": source}
             state.error = None
-            state.task = hass.async_create_background_task(state.run(reference, architecture), f"{DOMAIN} scan")
+            state.task = hass.async_create_background_task(state.run(source, reference, architecture), f"{DOMAIN} scan")
     connection.send_result(msg["id"], state.status(msg.get("known")))
 
 
