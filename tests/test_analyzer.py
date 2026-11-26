@@ -104,13 +104,15 @@ class ImageSourceTests(unittest.TestCase):
                       "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip"}
         manifest = {"config": {"digest": digest(config_bytes)}, "layers": [descriptor]}
         blobs = {f"blobs/{digest(config_bytes)}": config_bytes, f"blobs/{digest(compressed)}": compressed}
+        progress = []
         with patch.object(analyzer, "Registry") as registry:
             registry.return_value.manifest.return_value = manifest, "fixture-manifest"
             registry.return_value.open.side_effect = lambda address: io.BytesIO(blobs[address])
-            report = analyzer.analyze("fixture", "arm64")
+            report = analyzer.analyze("fixture", "arm64", lambda *state: progress.append(state))
         self.assertEqual(report["source"], "registry")
         self.assertEqual(report["layers"][0]["digest"], digest(compressed))
         self.assertEqual(report["totals"]["visible"], 5)
+        self.assertEqual(progress, [(0, 1, 0, len(compressed)), (1, 1, len(compressed), len(compressed))])
 
 
 def digest(content):

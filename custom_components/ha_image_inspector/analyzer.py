@@ -56,9 +56,11 @@ class Registry:
 
 
 class CountedReader:
-    def __init__(self, stream, digest=None):
+    def __init__(self, stream, digest=None, on_bytes=None):
         self.stream = stream
         self.digest = digest
+        self.on_bytes = on_bytes
+        self.next_notification = 4 * 1024 * 1024
         self.count = 0
 
     def read(self, size=-1):
@@ -66,6 +68,9 @@ class CountedReader:
         self.count += len(data)
         if self.digest is not None:
             self.digest.update(data)
+        if self.on_bytes is not None and self.count >= self.next_notification:
+            self.next_notification = self.count + 4 * 1024 * 1024
+            self.on_bytes(self.count)
         return data
 
     def drain(self):
@@ -294,20 +299,26 @@ def analyze(reference, architecture, progress=lambda *_: None):
         raise ValueError(f"The selected digest is not for linux/{architecture}")
     files, metadata, layers = {}, {}, []
     descriptors = manifest["layers"]
+    total_bytes = sum(descriptor["size"] for descriptor in descriptors)
+    downloaded = 0
     for index, descriptor in enumerate(descriptors):
-        progress(index, len(descriptors))
+        progress(index, len(descriptors), downloaded, total_bytes)
         layer_digest = descriptor["digest"]
         if not DIGEST.fullmatch(layer_digest):
             raise ValueError("Invalid layer digest")
         media_type = descriptor["mediaType"]
+        def report_download(count):
+            progress(index, len(descriptors), downloaded + count, total_bytes)
+
         with registry.open(f"blobs/{layer_digest}") as response:
-            compressed = CountedReader(response, hashlib.sha256())
+            compressed = CountedReader(response, hashlib.sha256(), report_download)
             layer = inspect_layer(compressed, media_type, index, files, metadata)
             if compressed.count != descriptor["size"] or "sha256:" + compressed.digest.hexdigest() != layer_digest:
                 raise ValueError("Registry layer size or digest mismatch")
         layer.update(digest=layer_digest, instruction=layer_instruction(config, index, len(descriptors)))
         layers.append(layer)
-    progress(len(layers), len(layers))
+        downloaded += layer["compressed"]
+    progress(len(layers), len(layers), downloaded, total_bytes)
     return summarize(reference, digest, architecture, "registry", layers, files, metadata)
 
 

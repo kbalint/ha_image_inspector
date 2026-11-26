@@ -39,6 +39,9 @@ form { display: grid; grid-template-columns: minmax(170px, 1fr) auto auto; align
 .source button[aria-pressed="true"] { background: #c9f2ef; border-color: #c9f2ef; color: #102f3a; font-weight: 700; }
 #local-source .primary { margin-top: 12px; }
 #registry-form { margin-top: 12px; }
+.registry-warning { display: flex; align-items: flex-start; gap: 9px; padding: 10px 12px; background: #493515; border: 1px solid #b9914a; border-radius: 9px; color: #fff0c9; }
+.registry-warning ha-icon { flex: none; }
+.registry-warning p { color: inherit; margin: 2px 0 0; }
 .export-help { border: 0; margin-top: 7px; }
 .export-help summary { display: block; width: fit-content; color: #b7eee9; padding: 3px 0; text-decoration: underline; }
 .export-help summary:hover { background: transparent; }

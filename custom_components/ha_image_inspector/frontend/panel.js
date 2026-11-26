@@ -7,9 +7,12 @@ const strings = {
     localPath: 'Replace /path/to/ha-config with the host directory mounted at /config, and homeassistant with your container name.',
     archive_missing: 'The Home Assistant configuration folder does not contain ha_image_inspector.tar.',
     archived: 'Archived layers', archivedHelp: 'Layer data as stored in the local export', opening: 'Opening the image archive…',
-    registryHint: 'An analysis downloads the image layers from the registry. This can use several hundred MB.',
+    registryWarning: 'Registry mode uses additional internet data',
+    registryHint: 'Starting an analysis downloads the image layers from the registry and can use several hundred MB.',
+    registryScan: 'Download and analyze', registryLayer: 'Downloading and reading layer',
+    localLayer: 'Reading layer', finishing: 'Preparing the report…',
     reference: 'Image tag or SHA-256 digest', architecture: 'Architecture', scan: 'Analyze image',
-    resolving: 'Resolving the image manifest…', scanning: 'Reading layers',
+    resolving: 'Resolving the image manifest…',
     empty: 'Analyze an image to see which integrations, packages and system files take up space.',
     error: 'Analysis failed', compressed: 'Registry download', tar: 'Unpacked layer archives',
     visible: 'Visible files', hidden: 'Hidden file payload',
@@ -33,9 +36,12 @@ const strings = {
     localPath: 'A /path/to/ha-config helyére a /config alá csatolt hostmappa kerüljön, a homeassistant helyére pedig a konténer neve.',
     archive_missing: 'A Home Assistant konfigurációs mappájában nincs ha_image_inspector.tar fájl.',
     archived: 'Archivált rétegek', archivedHelp: 'A rétegek mérete a helyi exportban', opening: 'Image-archívum megnyitása…',
-    registryHint: 'Az elemzés letölti az image rétegeit a registryből. Ez több száz MB forgalmat jelenthet.',
+    registryWarning: 'A registry mód plusz internetes adatforgalmat generál',
+    registryHint: 'Az elemzés indításakor a Home Assistant letölti az image rétegeit. Ez több száz MB is lehet.',
+    registryScan: 'Letöltés és elemzés', registryLayer: 'Réteg letöltése és beolvasása',
+    localLayer: 'Réteg beolvasása', finishing: 'Jelentés összeállítása…',
     reference: 'Image-tag vagy SHA-256 digest', architecture: 'Architektúra', scan: 'Image elemzése',
-    resolving: 'Image-manifest beolvasása…', scanning: 'Rétegek beolvasása',
+    resolving: 'Image-manifest beolvasása…',
     empty: 'Indíts elemzést, hogy lásd, melyik integráció, csomag és rendszerfájl foglalja a helyet.',
     error: 'Az elemzés sikertelen', compressed: 'Registry-letöltés', tar: 'Kibontott rétegarchívumok',
     visible: 'Látható fájlok', hidden: 'Elfedezett fájlok',
@@ -143,11 +149,11 @@ docker image save --output /path/to/ha-config/ha_image_inspector.tar "$image_id"
             <button class="primary" id="local-scan" type="button"><ha-icon icon="mdi:magnify"></ha-icon>${t.scan}</button>
           </div>
           <div id="registry-source">
-          <p>${t.registryHint}</p>
+          <div class="registry-warning"><ha-icon icon="mdi:alert-outline" aria-hidden="true"></ha-icon><div><strong>${t.registryWarning}</strong><p>${t.registryHint}</p></div></div>
           <form id="registry-form">
             <label>${t.reference}<input name="reference" value="${escape(reference)}" required maxlength="135" spellcheck="false"></label>
             <label>${t.architecture}<select name="architecture"><option>amd64</option><option ${architecture === 'arm64' ? 'selected' : ''}>arm64</option></select></label>
-            <button class="primary" type="submit"><ha-icon icon="mdi:magnify"></ha-icon>${t.scan}</button>
+            <button class="primary" type="submit"><ha-icon icon="mdi:download-outline"></ha-icon>${t.registryScan}</button>
           </form>
           </div>
           <div id="status" role="status" aria-live="polite"></div>
@@ -183,9 +189,19 @@ docker image save --output /path/to/ha-config/ha_image_inspector.tar "$image_id"
     const {progress, error} = this.state || {};
     this.shadowRoot.querySelectorAll('.primary').forEach(button => { button.disabled = this.pending || !!progress; });
     box.className = error ? 'error' : '';
-    box.textContent = error ? `${this.t.error} · ${this.t[error] || error}` : progress?.total
-      ? `${this.t.scanning} ${progress.done} ${this.t.of} ${progress.total}` : progress
-        ? (progress.source || this.scanSource) === 'local' ? this.t.opening : this.t.resolving : '';
+    if (error) {
+      box.textContent = `${this.t.error} · ${this.t[error] || error}`;
+      return;
+    }
+    const local = (progress?.source || this.scanSource) === 'local';
+    let status = '';
+    if (progress) {
+      if (!progress.total) status = local ? this.t.opening : this.t.resolving;
+      else if (progress.done === progress.total) status = this.t.finishing;
+      else status = `${local ? this.t.localLayer : this.t.registryLayer} ${progress.done + 1} ${this.t.of} ${progress.total}`;
+      if (progress.download_total) status += ` · ${this.format(progress.downloaded)} / ${this.format(progress.download_total)}`;
+    }
+    box.textContent = status;
   }
 
   summary() {

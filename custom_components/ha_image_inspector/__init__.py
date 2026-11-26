@@ -39,11 +39,12 @@ class Inspection:
                 "default_reference": HA_VERSION, "default_architecture": host_architecture()}
 
     async def run(self, source, reference, architecture):
-        def report_progress(index, total):
-            self.hass.loop.call_soon_threadsafe(update_progress, index, total)
+        def report_progress(index, total, downloaded=None, download_total=None):
+            self.hass.loop.call_soon_threadsafe(update_progress, index, total, downloaded, download_total)
 
-        def update_progress(index, total):
-            self.progress = {"done": index, "total": total, "source": source}
+        def update_progress(index, total, downloaded, download_total):
+            self.progress = {"done": index, "total": total, "source": source,
+                             "downloaded": downloaded, "download_total": download_total}
 
         try:
             if source == "local":
