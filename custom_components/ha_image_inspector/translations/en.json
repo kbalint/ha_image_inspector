@@ -1,0 +1,6 @@
+{
+  "config": {
+    "step": {"user": {"title": "HA Image Inspector", "description": "Add the image inspection panel to the admin sidebar."}},
+    "abort": {"already_configured": "HA Image Inspector is already enabled."}
+  }
+}

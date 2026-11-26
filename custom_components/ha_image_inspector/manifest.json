@@ -1,0 +1,12 @@
+{
+  "domain": "ha_image_inspector",
+  "name": "HA Image Inspector",
+  "codeowners": ["@kbalint"],
+  "config_flow": true,
+  "dependencies": ["frontend", "http", "panel_custom", "websocket_api"],
+  "documentation": "https://github.com/kbalint/ha_image_inspector",
+  "integration_type": "service",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/kbalint/ha_image_inspector/issues",
+  "version": "0.1.0"
+}
